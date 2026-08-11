@@ -1,0 +1,7 @@
+{
+    "mode": "toggle",
+    "language": "auto",
+    "model_size": "base",
+    "widget_position": [100, 100],
+    "global_hotkey": "<ctrl>+<alt>+v"
+}
