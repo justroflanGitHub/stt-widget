@@ -208,23 +208,32 @@ class VoiceWidget(QWidget):
         )
 
     def _draw_recording_icon(self, painter: QPainter) -> None:
-        """Draw a pulsing red circle (recording state)."""
+        """Draw a pulsing red circle with outer glow (recording state)."""
         centre_x = C.WIDGET_SIZE / 2
         centre_y = C.WIDGET_SIZE / 2
 
-        red = _color_from_hex(C.COLOR_RECORDING_FG)
-        alpha = 220 if self._pulse_visible else 90
+        # Outer glow ring (expands/contracts with pulse)
+        glow_alpha = 120 if self._pulse_visible else 30
+        glow_radius = 26 if self._pulse_visible else 22
+        glow = QColor(255, 0, 0, glow_alpha)
+        painter.setBrush(QBrush(glow))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(QPointF(centre_x, centre_y), glow_radius, glow_radius)
+
+        # Main red circle
+        red = QColor(C.COLOR_RECORDING_FG)
+        alpha = 255 if self._pulse_visible else 140
         red.setAlpha(alpha)
         painter.setBrush(QBrush(red))
         painter.setPen(Qt.NoPen)
 
-        radius = 14
+        radius = 16
         painter.drawEllipse(QPointF(centre_x, centre_y), radius, radius)
 
         # Inner highlight
         highlight = QColor(255, 255, 255, alpha // 3)
         painter.setBrush(QBrush(highlight))
-        painter.drawEllipse(QPointF(centre_x - 3, centre_y - 3), 5, 5)
+        painter.drawEllipse(QPointF(centre_x - 4, centre_y - 4), 6, 6)
 
     def _draw_processing_icon(self, painter: QPainter) -> None:
         """Draw a spinner arc (processing state)."""

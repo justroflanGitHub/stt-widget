@@ -11,8 +11,8 @@ APP_NAME: str = "VoiceToText Widget"
 APP_VERSION: str = "1.0.0"
 
 # ── Widget geometry ───────────────────────────────────────────────────────────
-WIDGET_SIZE: int = 64          # square widget, px
-WIDGET_CORNER_RADIUS: int = 16 # rounded corner radius
+WIDGET_SIZE: int = 72          # square widget, px — slightly bigger
+WIDGET_CORNER_RADIUS: int = 18 # rounded corner radius
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 # Idle state
@@ -22,8 +22,8 @@ COLOR_IDLE_BORDER: str = "#4752C4"
 
 # Recording state
 COLOR_RECORDING_BG: str = "#3B1C1C"
-COLOR_RECORDING_FG: str = "#ED4245"  # red
-COLOR_RECORDING_BORDER: str = "#C03537"
+COLOR_RECORDING_FG: str = "#FF0000"  # bright red — impossible to miss
+COLOR_RECORDING_BORDER: str = "#FF0000"
 
 # Processing state
 COLOR_PROCESSING_BG: str = "#2B2D31"
@@ -40,7 +40,7 @@ COLOR_LOADING_BG: str = "#2B2D31"
 COLOR_LOADING_FG: str = "#EB459E"  # pink
 
 # ── Animation timing ──────────────────────────────────────────────────────────
-PULSE_INTERVAL_MS: int = 500       # pulsing red circle interval
+PULSE_INTERVAL_MS: int = 350       # pulsing red circle interval (faster for visibility)
 DONE_FLASH_DURATION_MS: int = 800  # green flash duration
 TOOLTIP_DURATION_MS: int = 5000    # tooltip display duration
 SPINNER_INTERVAL_MS: int = 150     # spinner frame interval

@@ -125,9 +125,13 @@ class AppController(QObject):
         self.model_loaded.emit(success)
         if success:
             self._widget.set_state(C.STATE_IDLE)
+            if self._tray:
+                self._tray.set_state(C.STATE_IDLE)
             logger.info("Model ready — widget is now active.")
         else:
             self._widget.set_state(C.STATE_IDLE)
+            if self._tray:
+                self._tray.set_state(C.STATE_IDLE)
             logger.error("Model failed to load. Widget will attempt transcription on demand.")
 
     # ── Recording lifecycle ────────────────────────────────────────────────────
@@ -141,6 +145,8 @@ class AppController(QObject):
         try:
             self._recorder.start()
             self._widget.set_state(C.STATE_RECORDING)
+            if self._tray:
+                self._tray.set_state(C.STATE_RECORDING)
             self.recording_started.emit()
         except Exception as exc:
             logger.error("Failed to start recording: %s", exc)
@@ -150,6 +156,8 @@ class AppController(QObject):
         if not self._recorder.is_recording:
             return
         self._widget.set_state(C.STATE_PROCESSING)
+        if self._tray:
+            self._tray.set_state(C.STATE_PROCESSING)
         self.recording_stopped.emit()
 
         thread = threading.Thread(
@@ -164,7 +172,7 @@ class AppController(QObject):
         audio = self._recorder.stop()
         if audio is None or len(audio) < int(C.SAMPLE_RATE * C.MIN_RECORDING_DURATION_S):
             logger.warning("Recording too short; discarding.")
-            QTimer.singleShot(0, lambda: self._widget.set_state(C.STATE_IDLE))
+            QTimer.singleShot(0, lambda: self._set_state_both(C.STATE_IDLE))
             return
 
         text = self._transcriber.transcribe(audio, language=self._settings["language"])
@@ -175,6 +183,12 @@ class AppController(QObject):
 
         # Update UI on the main thread
         QTimer.singleShot(0, lambda: self._on_transcription_complete(text))
+
+    def _set_state_both(self, state: str) -> None:
+        """Update both widget and tray icon to the same state."""
+        self._widget.set_state(state)
+        if self._tray:
+            self._tray.set_state(state)
 
     def _on_transcription_complete(self, text: str) -> None:
         """Called on the main thread after transcription finishes."""
@@ -188,7 +202,7 @@ class AppController(QObject):
             )
 
         # Return to idle after the flash
-        QTimer.singleShot(C.DONE_FLASH_DURATION_MS, lambda: self._widget.set_state(C.STATE_IDLE))
+        QTimer.singleShot(C.DONE_FLASH_DURATION_MS, lambda: self._set_state_both(C.STATE_IDLE))
 
     # ── Settings callbacks ─────────────────────────────────────────────────────
 

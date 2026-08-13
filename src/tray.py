@@ -2,15 +2,17 @@
 tray.py — System tray icon with context menu for the VoiceToText widget.
 
 Provides quick access to: mode toggle, language selection, settings reset, quit.
+The tray icon dynamically changes based on the widget state.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+import math
+from typing import Optional
 
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QBrush, QPen
-from PyQt5.QtCore import Qt, QRectF, QObject, pyqtSignal
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QBrush, QPen, QRadialGradient
+from PyQt5.QtCore import Qt, QRectF, QObject, QPointF, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -23,34 +25,110 @@ from . import constants as C
 logger = logging.getLogger(__name__)
 
 
-def _create_tray_icon_pixmap() -> QPixmap:
-    """Draw a simple mic-in-circle icon for the system tray."""
-    size = 64
+def _draw_icon(state: str, size: int = 64) -> QPixmap:
+    """Draw a tray icon pixmap for the given widget state.
+
+    Args:
+        state: One of STATE_* constants.
+        size: Pixel size of the square pixmap.
+
+    Returns:
+        QPixmap with the rendered icon.
+    """
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
 
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.Antialiasing, True)
 
-    # Background circle
-    bg = QColor(C.COLOR_IDLE_BG)
-    painter.setBrush(QBrush(bg))
-    painter.setPen(QPen(QColor(C.COLOR_IDLE_BORDER), 2))
+    centre = size / 2
+
+    # ── Resolve colours ───────────────────────────────────────────────────────
+    state_colours = {
+        C.STATE_IDLE: (C.COLOR_IDLE_BG, C.COLOR_IDLE_FG, C.COLOR_IDLE_BORDER),
+        C.STATE_RECORDING: (C.COLOR_RECORDING_BG, C.COLOR_RECORDING_FG, C.COLOR_RECORDING_BORDER),
+        C.STATE_PROCESSING: (C.COLOR_PROCESSING_BG, C.COLOR_PROCESSING_FG, C.COLOR_PROCESSING_BORDER),
+        C.STATE_DONE: (C.COLOR_DONE_BG, C.COLOR_DONE_FG, C.COLOR_DONE_BORDER),
+        C.STATE_LOADING: (C.COLOR_LOADING_BG, C.COLOR_LOADING_FG, C.COLOR_LOADING_BG),
+    }
+    bg_hex, fg_hex, border_hex = state_colours.get(state, state_colours[C.STATE_IDLE])
+    bg = QColor(bg_hex)
+    fg = QColor(fg_hex)
+    border = QColor(border_hex)
+
+    # ── Background circle ─────────────────────────────────────────────────────
+    gradient = QRadialGradient(QPointF(centre, centre), centre)
+    gradient.setColorAt(0.0, bg)
+    gradient.setColorAt(1.0, QColor(0, 0, 0, 200))
+    painter.setBrush(QBrush(gradient))
+    painter.setPen(QPen(border, 2))
     painter.drawEllipse(2, 2, size - 4, size - 4)
 
-    # Mic capsule
-    fg = QColor(C.COLOR_IDLE_FG)
-    painter.setPen(QPen(fg, 2.5, Qt.SolidLine, Qt.RoundCap))
-    painter.setBrush(Qt.NoBrush)
-    centre = size / 2
-    painter.drawRoundedRect(QRectF(centre - 6, centre - 12, 12, 18), 6, 6)
+    if state == C.STATE_RECORDING:
+        # Big red dot
+        red = QColor(C.COLOR_RECORDING_FG)
+        painter.setBrush(QBrush(red))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(QPointF(centre, centre), size * 0.28, size * 0.28)
+        # Inner highlight
+        highlight = QColor(255, 255, 255, 80)
+        painter.setBrush(QBrush(highlight))
+        painter.drawEllipse(QPointF(centre - 3, centre - 3), size * 0.10, size * 0.10)
 
-    # Arc
-    arc_r = 12
-    painter.drawArc(QRectF(centre - arc_r, centre - arc_r / 2, arc_r * 2, arc_r * 2), 0, 180 * 16)
+    elif state == C.STATE_PROCESSING:
+        # Yellow spinner arc
+        yellow = QColor(C.COLOR_PROCESSING_FG)
+        painter.setPen(QPen(yellow, 3, Qt.SolidLine, Qt.RoundCap))
+        painter.setBrush(Qt.NoBrush)
+        radius = size * 0.28
+        rect = QRectF(centre - radius, centre - radius, radius * 2, radius * 2)
+        painter.drawArc(rect, 45 * 16, 270 * 16)
+        # Three dots
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(yellow))
+        for i in range(3):
+            angle = math.radians(i * 120 + 45)
+            dx = math.cos(angle) * (radius + 5)
+            dy = math.sin(angle) * (radius + 5)
+            painter.drawEllipse(QPointF(centre + dx, centre + dy), 2, 2)
 
-    # Stem
-    painter.drawLine(int(centre), int(centre + arc_r / 2), int(centre), int(centre + arc_r / 2 + 4))
+    elif state == C.STATE_DONE:
+        # Green checkmark
+        green = QColor(C.COLOR_DONE_FG)
+        painter.setPen(QPen(green, 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setBrush(Qt.NoBrush)
+        s = size * 0.18
+        p1 = QPointF(centre - s, centre + s * 0.15)
+        p2 = QPointF(centre - s * 0.3, centre + s * 0.8)
+        p3 = QPointF(centre + s, centre - s * 0.6)
+        painter.drawLine(p1, p2)
+        painter.drawLine(p2, p3)
+
+    elif state == C.STATE_LOADING:
+        # Three pink dots
+        pink = QColor(C.COLOR_LOADING_FG)
+        painter.setBrush(QBrush(pink))
+        painter.setPen(Qt.NoPen)
+        for i, offset in enumerate([-10, 0, 10]):
+            painter.drawEllipse(QPointF(centre + offset, centre), 3, 3)
+
+    else:
+        # Idle: mic icon
+        painter.setPen(QPen(fg, 2.5, Qt.SolidLine, Qt.RoundCap))
+        painter.setBrush(Qt.NoBrush)
+        mic_w = size * 0.20
+        mic_h = size * 0.32
+        mic_rect = QRectF(centre - mic_w / 2, centre - mic_h / 2 - 2, mic_w, mic_h)
+        painter.drawRoundedRect(mic_rect, mic_w / 2, mic_w / 2)
+        arc_r = size * 0.23
+        painter.drawArc(
+            QRectF(centre - arc_r, centre - arc_r / 2, arc_r * 2, arc_r * 2),
+            0, 180 * 16,
+        )
+        painter.drawLine(
+            QPointF(centre, centre + arc_r / 2),
+            QPointF(centre, centre + arc_r / 2 + 4),
+        )
 
     painter.end()
     return pix
@@ -73,9 +151,9 @@ class TrayController(QObject):
         super().__init__()
         self._mode = mode
         self._language = language
+        self._state = C.STATE_IDLE
 
-        icon = QIcon(_create_tray_icon_pixmap())
-
+        icon = QIcon(_draw_icon(C.STATE_IDLE))
         self._tray = QSystemTrayIcon(icon)
         self._tray.setToolTip(C.APP_NAME)
         self._tray.setVisible(True)
@@ -122,6 +200,29 @@ class TrayController(QObject):
         menu.addAction(quit_action)
 
         self._tray.setContextMenu(menu)
+
+    # ── State management ──────────────────────────────────────────────────────
+
+    def set_state(self, state: str) -> None:
+        """Update the tray icon to reflect the current widget state.
+
+        Args:
+            state: One of ``STATE_*`` constants.
+        """
+        if state == self._state:
+            return
+        self._state = state
+        icon = QIcon(_draw_icon(state))
+        self._tray.setIcon(icon)
+
+        tooltips = {
+            C.STATE_IDLE: C.APP_NAME,
+            C.STATE_RECORDING: f"{C.APP_NAME} — Recording…",
+            C.STATE_PROCESSING: f"{C.APP_NAME} — Processing…",
+            C.STATE_DONE: f"{C.APP_NAME} — Done",
+            C.STATE_LOADING: f"{C.APP_NAME} — Loading model…",
+        }
+        self._tray.setToolTip(tooltips.get(state, C.APP_NAME))
 
     # ── Slot handlers ─────────────────────────────────────────────────────────
 
