@@ -54,10 +54,19 @@ SILENCE_THRESHOLD: float = 0.01   # RMS below this = silence
 MIN_RECORDING_DURATION_S: float = 0.3  # ignore clicks shorter than this
 
 # ── Speech-to-Text ────────────────────────────────────────────────────────────
-DEFAULT_MODEL_SIZE: str = "base"
+# Model sizes: bigger = more accurate (esp. for Russian), but slower on CPU and
+# larger to download. "small" is a good accuracy/speed balance for short clips.
+DEFAULT_MODEL_SIZE: str = "small"
+SUPPORTED_MODEL_SIZES: tuple[str, ...] = ("tiny", "base", "small", "medium")
+MODEL_LABELS: dict[str, str] = {
+    "tiny": "Tiny (fastest)",
+    "base": "Base",
+    "small": "Small (recommended)",
+    "medium": "Medium (most accurate)",
+}
 DEFAULT_COMPUTE_TYPE: str = "int8"
 DEFAULT_DEVICE: str = "cpu"
-DEFAULT_LANGUAGE: str = "auto"     # "auto", "ru", or "en"
+DEFAULT_LANGUAGE: str = "auto"     # "auto" (ru/en), "ru", or "en"
 SUPPORTED_LANGUAGES: tuple[str, ...] = ("auto", "ru", "en")
 
 # ── Interaction modes ─────────────────────────────────────────────────────────

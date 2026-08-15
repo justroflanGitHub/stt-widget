@@ -1,10 +1,10 @@
 {
-    "mode": "push_to_talk",
+    "mode": "toggle",
     "language": "auto",
-    "model_size": "base",
+    "model_size": "tiny",
     "widget_position": [
-        424,
-        141
+        439,
+        251
     ],
     "global_hotkey": "<ctrl>+<alt>+v"
 }

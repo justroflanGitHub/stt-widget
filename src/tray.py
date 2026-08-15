@@ -145,12 +145,20 @@ class TrayController(QObject):
 
     mode_changed = pyqtSignal(str)
     language_changed = pyqtSignal(str)
+    model_changed = pyqtSignal(str)
+    set_hotkey_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
-    def __init__(self, mode: str = C.MODE_TOGGLE, language: str = C.DEFAULT_LANGUAGE) -> None:
+    def __init__(
+        self,
+        mode: str = C.MODE_TOGGLE,
+        language: str = C.DEFAULT_LANGUAGE,
+        model_size: str = C.DEFAULT_MODEL_SIZE,
+    ) -> None:
         super().__init__()
         self._mode = mode
         self._language = language
+        self._model_size = model_size
         self._state = C.STATE_IDLE
 
         icon = QIcon(_draw_icon(C.STATE_IDLE))
@@ -163,6 +171,12 @@ class TrayController(QObject):
     def _build_menu(self) -> None:
         """Construct the right-click context menu."""
         menu = QMenu()
+
+        # ── Set hotkey action ────────────────────────────────────────────────
+        self._hotkey_action = QAction("Set Hotkey…", menu)
+        self._hotkey_action.triggered.connect(lambda: self.set_hotkey_requested.emit())
+        menu.addAction(self._hotkey_action)
+        menu.addSeparator()
 
         # ── Mode submenu ──────────────────────────────────────────────────────
         mode_menu = menu.addMenu("Mode")
@@ -192,6 +206,18 @@ class TrayController(QObject):
             act.triggered.connect(lambda checked, lc=lang_code: self._on_language_selected(lc))
             lang_group.addAction(act)
             lang_menu.addAction(act)
+
+        # ── Model submenu ────────────────────────────────────────────────────
+        model_menu = menu.addMenu("Model")
+        model_group = QActionGroup(menu)
+        model_group.setExclusive(True)
+        for size in C.SUPPORTED_MODEL_SIZES:
+            label = C.MODEL_LABELS.get(size, size)
+            act = QAction(label, model_menu, checkable=True)
+            act.setChecked(self._model_size == size)
+            act.triggered.connect(lambda checked, sz=size: self._on_model_selected(sz))
+            model_group.addAction(act)
+            model_menu.addAction(act)
 
         # ── Separator + Quit ──────────────────────────────────────────────────
         menu.addSeparator()
@@ -236,6 +262,11 @@ class TrayController(QObject):
         self.language_changed.emit(lang)
         logger.info("Tray: language changed to %s", lang)
 
+    def _on_model_selected(self, size: str) -> None:
+        self._model_size = size
+        self.model_changed.emit(size)
+        logger.info("Tray: model changed to %s", size)
+
     def _on_quit(self) -> None:
         logger.info("Tray: quit requested.")
         self.quit_requested.emit()
@@ -253,6 +284,15 @@ class TrayController(QObject):
     def update_language(self, lang: str) -> None:
         """Update the checked state of the language menu."""
         self._language = lang
+
+    def update_model(self, size: str) -> None:
+        """Update the checked state of the model menu."""
+        self._model_size = size
+
+    def update_hotkey_label(self, hotkey: str) -> None:
+        """Refresh the 'Set Hotkey…' action to show the current binding."""
+        from .hotkey_dialog import pretty_hotkey
+        self._hotkey_action.setText("Set Hotkey… (%s)" % pretty_hotkey(hotkey))
 
     def hide(self) -> None:
         """Hide the tray icon."""

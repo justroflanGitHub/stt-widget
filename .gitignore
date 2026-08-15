@@ -15,3 +15,5 @@ env/
 *.mp3
 *.ogg
 settings.json.bak
+.cache/
+models/

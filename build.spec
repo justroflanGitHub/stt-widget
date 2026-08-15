@@ -1,24 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Lean PyInstaller spec for VoiceToText Widget."""
 
-import os
-import glob
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 block_cipher = None
 
-# Collect torch DLLs that ctranslate2 needs at runtime
-torch_lib_dir = r'C:\Users\mikhail\AppData\Local\Programs\Python\Python313\Lib\site-packages\torch\lib'
-torch_dlls = []
-if os.path.isdir(torch_lib_dir):
-    for dll in glob.glob(os.path.join(torch_lib_dir, '*.dll')):
-        torch_dlls.append((dll, '.'))
-
-# Also collect ctranslate2 native libs
-ct2_dir = r'C:\Users\mikhail\AppData\Local\Programs\Python\Python313\Lib\site-packages\ctranslate2'
-ct2_dlls = []
-if os.path.isdir(ct2_dir):
-    for dll in glob.glob(os.path.join(ct2_dir, '*.dll')):
-        ct2_dlls.append((dll, '.'))
+# Pull in everything faster_whisper and ctranslate2 ship — native libs
+# (ctranslate2.dll, libiomp5md.dll, cudnn64_9.dll) plus faster_whisper's bundled
+# Silero VAD asset (assets/silero_vad_v6.onnx). collect_all keeps them inside
+# their package directories, where the packages' own loaders expect to find them
+# (do NOT flatten these to the bundle root — a duplicate libiomp5md.dll makes
+# the OpenMP runtime initialize twice and segfault).
+ct2_datas, ct2_binaries, ct2_hidden = collect_all('ctranslate2')
+fw_datas, fw_binaries, fw_hidden = collect_all('faster_whisper')
 
 # Only the hidden imports we actually need
 hidden_imports = [
@@ -42,14 +36,18 @@ hidden_imports = [
     'numpy',
     'numpy.core',
     'av',
-]
+    # onnxruntime is imported lazily (try/except) by faster_whisper.vad for the
+    # Silero VAD filter, so PyInstaller drops it as "optional". Force-include it
+    # so the bundled hook-onnxruntime collects its native libs.
+    'onnxruntime',
+] + ct2_hidden + fw_hidden
 
-datas = []
+datas = ct2_datas + fw_datas
 
 a = Analysis(
     ['launch.py'],
     pathex=[r'C:\Users\mikhail\.openclaw\workspace\voice-widget'],
-    binaries=torch_dlls + ct2_dlls,
+    binaries=ct2_binaries + fw_binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
@@ -69,23 +67,37 @@ a = Analysis(
         'PyQt5.QtXml', 'PyQt5.QtXmlPatterns',
         'pandas', 'scipy', 'sklearn',
         'pyarrow', 'numba', 'llvmlite',
-        'lxml', 'h5py', 'onnxruntime',
+        'lxml', 'h5py',
         'grpc', 'rich', 'anyio',
         'PIL', 'Pillow',
-        'torch.distributed', 'torch.utils.tensorboard',
+        'torch', 'torch.distributed', 'torch.utils.tensorboard',
     ],
     cipher=block_cipher,
 )
+
+# Drop the MSVC runtime DLLs that PyQt5 bundles under Qt5/bin. They are a
+# different version from the canonical copies PyInstaller places at the bundle
+# root (the ones ctranslate2 / numpy link against), and because Qt5/bin is on
+# the DLL search path, ctranslate2 would otherwise load Qt's MSVCP140.dll and
+# crash with an access violation (0xC0000005) the first time it calls into the
+# C++ runtime — e.g. while constructing the Whisper model. With the duplicates
+# gone, every module resolves the single, ABI-consistent MSVCP140.dll at root.
+_DROP_RUNTIMES = {'msvcp140.dll', 'msvcr140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll'}
+a.binaries = [
+    b for b in a.binaries
+    if not (
+        '/qt5/bin/' in b[0].replace('\\', '/').lower()
+        and b[0].replace('\\', '/').split('/')[-1].lower() in _DROP_RUNTIMES
+    )
+]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='VoiceToTextWidget',
     debug=False,
     bootloader_ignore_signals=False,
@@ -93,6 +105,17 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='VoiceToTextWidget',
 )

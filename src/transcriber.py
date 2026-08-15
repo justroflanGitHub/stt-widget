@@ -130,20 +130,30 @@ class Transcriber:
             logger.warning("Empty audio passed to transcribe().")
             return ""
 
-        # Determine language code for faster-whisper
-        lang_arg: Optional[str] = None if language == "auto" else language
-
         try:
             with self._load_lock:
                 model = self._model
 
+            # Resolve language: explicit ru/en, or detect between the two.
+            if language == "auto":
+                lang_arg = self._detect_ru_or_en(model, audio)
+            else:
+                lang_arg = language
+
+            logger.info("Starting transcription (audio len=%d samples, lang=%s)...", len(audio), lang_arg)
+
             segments, _info = model.transcribe(
                 audio,
                 language=lang_arg,
-                beam_size=1,       # fastest for CPU real-time
+                beam_size=5,                      # beam search: more accurate than greedy (was 1)
                 best_of=1,
                 temperature=0.0,
+                condition_on_previous_text=False, # avoids repetition / hallucination loops
                 vad_filter=True,
+                # Prime the model so foreign terms are kept in their original
+                # script (e.g. an English word inside Russian speech stays Latin
+                # instead of being transliterated). See _initial_prompt_for().
+                initial_prompt=self._initial_prompt_for(lang_arg),
             )
             # segments is a generator — consume it
             text = " ".join(seg.text.strip() for seg in segments).strip()
@@ -152,3 +162,42 @@ class Transcriber:
         except Exception as exc:
             logger.error("Transcription failed: %s", exc)
             return ""
+
+    @staticmethod
+    def _initial_prompt_for(lang: Optional[str]) -> Optional[str]:
+        """Return an initial prompt that primes the model to keep foreign terms
+        in their original script (e.g. an English word inside Russian speech).
+
+        Without this, forcing ``language="ru"`` transliterates an English term
+        like "deploy" into Cyrillic. The prompt is a natural sentence in the
+        target language that already contains the foreign terms, so the model's
+        vocabulary/context accepts mixed-script output.
+        """
+        if lang == "ru":
+            return (
+                "Обсуждаем разработку: нужно сделать deploy и проверить server, "
+                "закрыть баги, залогировать commit и выпустить релиз."
+            )
+        return None
+
+    @staticmethod
+    def _detect_ru_or_en(model, audio) -> Optional[str]:
+        """Return ``"ru"`` or ``"en"`` — whichever Whisper finds more likely.
+
+        Full auto-detection across ~100 languages is unreliable on short clips
+        (it often returns ``uk``/``be`` for Russian). Since the user speaks only
+        Russian or English, we read the full probability distribution from
+        ``detect_language`` and take the higher of the two. Returns ``None`` on
+        failure so faster-whisper falls back to its own auto-detection.
+        """
+        try:
+            _lang, _prob, all_probs = model.detect_language(audio, vad_filter=True)
+            probs = dict(all_probs)
+            ru = float(probs.get("ru", 0.0))
+            en = float(probs.get("en", 0.0))
+            chosen = "ru" if ru >= en else "en"
+            logger.info("Language detection (ru/en): ru=%.2f en=%.2f -> %s", ru, en, chosen)
+            return chosen
+        except Exception as exc:
+            logger.warning("Language detection failed (%s); falling back to full auto.", exc)
+            return None

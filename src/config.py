@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +30,16 @@ def _default_settings() -> dict[str, Any]:
 
 
 def get_settings_path() -> Path:
-    """Return the absolute path to ``settings.json`` next to this package."""
-    # Look in the same directory as the project root (parent of src/)
+    """Return the absolute path to ``settings.json``.
+
+    When frozen by PyInstaller, store settings next to the executable — a
+    stable, user-writable location — rather than inside the bundle's
+    ``_internal`` directory (which is an internal, version-specific folder
+    and in onefile builds is a wiped temp dir). In development, use the
+    project root (the parent of ``src/``).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / C.SETTINGS_FILENAME
     src_dir = Path(__file__).resolve().parent
     project_root = src_dir.parent
     return project_root / C.SETTINGS_FILENAME
