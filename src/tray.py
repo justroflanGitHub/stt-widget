@@ -21,8 +21,13 @@ from PyQt5.QtWidgets import (
 )
 
 from . import constants as C
+from .icons import draw_microphone
 
 logger = logging.getLogger(__name__)
+
+# Sizes rendered into the tray QIcon; Windows picks the closest match for the
+# current DPI, so providing several keeps the glyph crisp at any scaling.
+_ICON_SIZES: tuple[int, ...] = (16, 20, 24, 32, 40, 48, 64)
 
 
 def _draw_icon(state: str, size: int = 64) -> QPixmap:
@@ -114,24 +119,18 @@ def _draw_icon(state: str, size: int = 64) -> QPixmap:
 
     else:
         # Idle: mic icon
-        painter.setPen(QPen(fg, 2.5, Qt.SolidLine, Qt.RoundCap))
-        painter.setBrush(Qt.NoBrush)
-        mic_w = size * 0.20
-        mic_h = size * 0.32
-        mic_rect = QRectF(centre - mic_w / 2, centre - mic_h / 2 - 2, mic_w, mic_h)
-        painter.drawRoundedRect(mic_rect, mic_w / 2, mic_w / 2)
-        arc_r = size * 0.23
-        painter.drawArc(
-            QRectF(centre - arc_r, centre - arc_r / 2, arc_r * 2, arc_r * 2),
-            0, 180 * 16,
-        )
-        painter.drawLine(
-            QPointF(centre, centre + arc_r / 2),
-            QPointF(centre, centre + arc_r / 2 + 4),
-        )
+        draw_microphone(painter, fg, float(size))
 
     painter.end()
     return pix
+
+
+def _state_icon(state: str) -> QIcon:
+    """Build a multi-resolution icon for *state* (crisp at any tray DPI)."""
+    icon = QIcon()
+    for size in _ICON_SIZES:
+        icon.addPixmap(_draw_icon(state, size), QIcon.Normal, QIcon.Off)
+    return icon
 
 
 class TrayController(QObject):
@@ -161,7 +160,7 @@ class TrayController(QObject):
         self._model_size = model_size
         self._state = C.STATE_IDLE
 
-        icon = QIcon(_draw_icon(C.STATE_IDLE))
+        icon = _state_icon(C.STATE_IDLE)
         self._tray = QSystemTrayIcon(icon)
         self._tray.setToolTip(C.APP_NAME)
         self._tray.setVisible(True)
@@ -211,6 +210,7 @@ class TrayController(QObject):
         model_menu = menu.addMenu("Model")
         model_group = QActionGroup(menu)
         model_group.setExclusive(True)
+        self._model_actions = {}
         for size in C.SUPPORTED_MODEL_SIZES:
             label = C.MODEL_LABELS.get(size, size)
             act = QAction(label, model_menu, checkable=True)
@@ -218,6 +218,7 @@ class TrayController(QObject):
             act.triggered.connect(lambda checked, sz=size: self._on_model_selected(sz))
             model_group.addAction(act)
             model_menu.addAction(act)
+            self._model_actions[size] = act
 
         # ── Separator + Quit ──────────────────────────────────────────────────
         menu.addSeparator()
@@ -238,8 +239,7 @@ class TrayController(QObject):
         if state == self._state:
             return
         self._state = state
-        icon = QIcon(_draw_icon(state))
-        self._tray.setIcon(icon)
+        self._tray.setIcon(_state_icon(state))
 
         tooltips = {
             C.STATE_IDLE: C.APP_NAME,
@@ -286,8 +286,14 @@ class TrayController(QObject):
         self._language = lang
 
     def update_model(self, size: str) -> None:
-        """Update the checked state of the model menu."""
+        """Update the checked state of the model menu.
+
+        Re-checks the action for *size* (setChecked does not emit ``triggered``,
+        so this cannot feed back into the controller).
+        """
         self._model_size = size
+        for model_size, action in self._model_actions.items():
+            action.setChecked(model_size == size)
 
     def update_hotkey_label(self, hotkey: str) -> None:
         """Refresh the 'Set Hotkey…' action to show the current binding."""

@@ -105,7 +105,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,  # no console window; logs go to voicetotext.log (launch.py)
     icon=None,
 )
 

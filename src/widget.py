@@ -32,6 +32,7 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import QWidget
 
 from . import constants as C
+from .icons import draw_microphone
 
 logger = logging.getLogger(__name__)
 
@@ -173,39 +174,8 @@ class VoiceWidget(QWidget):
 
     def _draw_mic_icon(self, painter: QPainter) -> None:
         """Draw a microphone icon (idle state)."""
-        centre_x = C.WIDGET_SIZE / 2
-        centre_y = C.WIDGET_SIZE / 2
-
         fg = _color_from_hex(C.COLOR_IDLE_FG)
-        painter.setPen(QPen(fg, 2.5, Qt.SolidLine, Qt.RoundCap))
-        painter.setBrush(Qt.NoBrush)
-
-        # Mic capsule body
-        mic_w = 12
-        mic_h = 20
-        mic_rect = QRectF(
-            centre_x - mic_w / 2,
-            centre_y - mic_h / 2 - 2,
-            mic_w,
-            mic_h,
-        )
-        painter.drawRoundedRect(mic_rect, 6, 6)
-
-        # Stand arc (U-shape under the capsule)
-        arc_radius = 14
-        arc_rect = QRectF(
-            centre_x - arc_radius,
-            centre_y - arc_radius / 2,
-            arc_radius * 2,
-            arc_radius * 2,
-        )
-        painter.drawArc(arc_rect, 0 * 16, 180 * 16)
-
-        # Stem
-        painter.drawLine(
-            QPointF(centre_x, centre_y + arc_radius / 2),
-            QPointF(centre_x, centre_y + arc_radius / 2 + 4),
-        )
+        draw_microphone(painter, fg, float(C.WIDGET_SIZE))
 
     def _draw_recording_icon(self, painter: QPainter) -> None:
         """Draw a pulsing red circle with outer glow (recording state)."""

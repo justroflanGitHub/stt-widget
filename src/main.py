@@ -54,6 +54,9 @@ class AppController(QObject):
         self._settings = load_settings()
         self._recorder = None
         self._transcriber = None
+        # Last model that loaded successfully — the fallback if a runtime
+        # model switch fails (e.g. download unavailable).
+        self._last_good_model: str = self._settings["model_size"]
         self._widget = None
         self._tray = None
         self._hotkey_listener = None
@@ -77,12 +80,7 @@ class AppController(QObject):
         from .transcriber import Transcriber
 
         # ── Transcriber (model loads in background) ────────────────────────────
-        self._transcriber = Transcriber(
-            model_size=self._settings["model_size"],
-            compute_type=C.DEFAULT_COMPUTE_TYPE,
-            device=C.DEFAULT_DEVICE,
-        )
-        self._transcriber.load_model(callback=self._on_model_loaded)
+        self._load_transcriber(self._settings["model_size"])
 
         # ── Audio recorder ─────────────────────────────────────────────────────
         self._recorder = AudioRecorder()
@@ -113,6 +111,23 @@ class AppController(QObject):
 
         # ── Global hotkey ──────────────────────────────────────────────────────
         self._setup_hotkey()
+
+    def _load_transcriber(self, model_size: str) -> None:
+        """(Re)create the transcriber for *model_size*; model loads in background.
+
+        The single place that constructs a Transcriber — startup, runtime model
+        switches and failure fallbacks all go through here, so none of them can
+        drift out of sync. The import stays local: Transcriber pulls numpy, and
+        heavy deps (ctranslate2/faster_whisper) load lazily inside it.
+        """
+        from .transcriber import Transcriber
+
+        self._transcriber = Transcriber(
+            model_size=model_size,
+            compute_type=C.DEFAULT_COMPUTE_TYPE,
+            device=C.DEFAULT_DEVICE,
+        )
+        self._transcriber.load_model(callback=self._on_model_loaded)
 
     def _setup_hotkey(self) -> None:
         """Register the global hotkey from settings."""
@@ -196,11 +211,31 @@ class AppController(QObject):
     def _on_model_loaded_ui(self, success: bool) -> None:
         """Run on the GUI thread once the model has finished loading."""
         self.model_loaded.emit(success)
-        self._set_state_both(C.STATE_IDLE)
         if success:
+            self._last_good_model = self._transcriber.model_size
+            self._set_state_both(C.STATE_IDLE)
             logger.info("Model ready — widget is now active.")
+            return
+
+        logger.error("Model failed to load. Widget will attempt transcription on demand.")
+        failed = self._transcriber.model_size
+        previous = self._last_good_model
+        if previous and previous != failed:
+            # A runtime switch failed (e.g. model download unavailable): fall
+            # back to the last model that worked, so settings never end up
+            # pointing at a model that cannot load.
+            if self._tray:
+                self._tray.show_message(
+                    "Model", f"Could not load '{failed}' — reverting to '{previous}'."
+                )
+                self._tray.update_model(previous)
+            self._settings["model_size"] = previous
+            save_settings(self._settings)
+            self._set_state_both(C.STATE_LOADING)
+            self._load_transcriber(previous)
         else:
-            logger.error("Model failed to load. Widget will attempt transcription on demand.")
+            # The startup model itself failed — nothing better to fall back to.
+            self._set_state_both(C.STATE_IDLE)
 
     # ── Recording lifecycle ────────────────────────────────────────────────────
 
@@ -293,6 +328,19 @@ class AppController(QObject):
         """Switch the Whisper model at runtime (downloads on first use)."""
         if model_size == self._transcriber.model_size:
             return
+        state = self._widget.get_state()
+        if state == C.STATE_LOADING:
+            if self._tray:
+                self._tray.show_message("Model", "Still loading — try again in a moment.")
+                self._tray.update_model(self._transcriber.model_size)
+            return
+        if state in (C.STATE_RECORDING, C.STATE_PROCESSING):
+            # Swapping the transcriber mid-recording would break the running
+            # transcription worker — refuse and re-sync the menu checkmark.
+            if self._tray:
+                self._tray.show_message("Model", "Busy — finish the current recording first.")
+                self._tray.update_model(self._transcriber.model_size)
+            return
         self._settings["model_size"] = model_size
         save_settings(self._settings)
         # Show loading state and rebuild the transcriber; the model loads in the
@@ -300,12 +348,8 @@ class AppController(QObject):
         self._set_state_both(C.STATE_LOADING)
         if self._tray:
             self._tray.show_message("Model", f"Switching to {model_size}…")
-        self._transcriber = Transcriber(
-            model_size=model_size,
-            compute_type=C.DEFAULT_COMPUTE_TYPE,
-            device=C.DEFAULT_DEVICE,
-        )
-        self._transcriber.load_model(callback=self._on_model_loaded)
+            self._tray.update_model(model_size)
+        self._load_transcriber(model_size)
 
     def _on_widget_dragged(self, x: int, y: int) -> None:
         self._settings["widget_position"] = [x, y]
