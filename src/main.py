@@ -135,11 +135,13 @@ class AppController(QObject):
 
     def _apply_hotkey(self, hotkey_str: str) -> bool:
         """(Re)register *hotkey_str* as the global hotkey. Returns success."""
-        from pynput import keyboard
+        # Local import: pynput pulls in Windows hooks, and hotkey.py needs the
+        # backend resolved — keep both out of the module import path.
+        from .hotkey import GlobalHotkeyListener, parse_combo
 
         try:
-            keyboard.HotKey.parse(hotkey_str)  # validate format
-        except (ValueError, Exception) as exc:
+            parse_combo(hotkey_str)  # validate format
+        except Exception as exc:
             logger.warning("Invalid hotkey %r: %s", hotkey_str, exc)
             return False
 
@@ -148,7 +150,9 @@ class AppController(QObject):
             self._hotkey_listener = None
 
         try:
-            self._hotkey_listener = keyboard.GlobalHotKeys(
+            # Side-aware listener — GlobalHotKeys would collapse Right Ctrl
+            # onto the generic Ctrl and the hotkey would never fire.
+            self._hotkey_listener = GlobalHotkeyListener(
                 {hotkey_str: self._on_hotkey}
             )
             self._hotkey_listener.start()
@@ -167,6 +171,7 @@ class AppController(QObject):
     def _on_hotkey_ui(self) -> None:
         """Handle the hotkey on the GUI thread."""
         state = self._widget.get_state()
+        logger.info("Hotkey pressed in state '%s' — toggling recording.", state)
         if state in (C.STATE_IDLE, C.STATE_DONE):
             self.start_recording()
         elif state == C.STATE_RECORDING:

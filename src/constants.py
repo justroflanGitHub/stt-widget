@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # ── Application metadata ──────────────────────────────────────────────────────
 APP_NAME: str = "VoiceToText Widget"
-APP_VERSION: str = "1.0.0"
+APP_VERSION: str = "1.1.0"
 
 # ── Widget geometry ───────────────────────────────────────────────────────────
 WIDGET_SIZE: int = 72          # square widget, px — slightly bigger
@@ -75,7 +75,10 @@ MODE_PUSH_TO_TALK: str = "push_to_talk"
 SUPPORTED_MODES: tuple[str, ...] = (MODE_TOGGLE, MODE_PUSH_TO_TALK)
 
 # ── Global hotkey ─────────────────────────────────────────────────────────────
-DEFAULT_HOTKEY: str = "<ctrl>+<alt>+v"
+# A bare Right Ctrl: activation with a single key nobody uses for anything
+# else. The hotkey engine (src/hotkey.py) distinguishes the physical sides, so
+# Left Ctrl keeps working normally (copy/paste etc.).
+DEFAULT_HOTKEY: str = "<ctrl_r>"
 
 # ── Settings file ─────────────────────────────────────────────────────────────
 SETTINGS_FILENAME: str = "settings.json"
