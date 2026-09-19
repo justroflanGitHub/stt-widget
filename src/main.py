@@ -66,8 +66,17 @@ class AppController(QObject):
         # Route background-thread results onto the GUI thread (queued slots).
         self._ui_model_loaded.connect(self._on_model_loaded_ui)
         self._ui_transcription_done.connect(self._on_transcription_complete)
-        self._ui_reset_idle.connect(lambda: self._set_state_both(C.STATE_IDLE))
+        self._ui_reset_idle.connect(self._on_reset_idle_ui)
         self._ui_hotkey_triggered.connect(self._on_hotkey_ui)
+
+        # Transcription watchdog: a worker stuck inside a native call never
+        # returns and never raises (e.g. ctranslate2 deadlocking on a broken
+        # CUDA stack), which would leave the widget in Processing forever.
+        # The timer is the last line of defence — it recovers the UI and
+        # reloads the model on CPU.
+        self._watchdog = QTimer(self)
+        self._watchdog.setSingleShot(True)
+        self._watchdog.timeout.connect(self._on_transcribe_timeout)
 
         self._init_components()
 
@@ -278,6 +287,7 @@ class AppController(QObject):
         if self._tray:
             self._tray.set_state(C.STATE_PROCESSING)
         self.recording_stopped.emit()
+        self._watchdog.start(int(C.TRANSCRIBE_TIMEOUT_S * 1000))
 
         thread = threading.Thread(
             target=self._transcribe_worker,
@@ -285,6 +295,28 @@ class AppController(QObject):
             name="transcribe-worker",
         )
         thread.start()
+
+    def _on_transcribe_timeout(self) -> None:
+        """Watchdog fired: transcription ran past TRANSCRIBE_TIMEOUT_S.
+
+        Recover instead of hanging in Processing forever: rebuild the
+        transcriber on CPU (the stuck worker is a daemon thread and holds no
+        shared locks, so it can be safely abandoned) and let the usual
+        model-loaded callback return the widget to idle.
+        """
+        if self._widget.get_state() != C.STATE_PROCESSING:
+            return  # finished in time — nothing to do
+        logger.error(
+            "Transcription watchdog: no result within %.0fs — recovering on CPU.",
+            C.TRANSCRIBE_TIMEOUT_S,
+        )
+        if self._tray:
+            self._tray.show_message(
+                "Transcription",
+                "Timed out on the current device — switching to CPU.",
+            )
+        self._set_state_both(C.STATE_LOADING)
+        self._load_transcriber(self._settings["model_size"], device=C.DEVICE_CPU)
 
     def _transcribe_worker(self) -> None:
         """Run in a background thread: get audio → transcribe → copy → notify UI."""
@@ -311,8 +343,20 @@ class AppController(QObject):
         if self._tray:
             self._tray.set_state(state)
 
+    def _on_reset_idle_ui(self) -> None:
+        """Discard a too-short recording: cancel the watchdog, return to idle."""
+        self._watchdog.stop()
+        self._set_state_both(C.STATE_IDLE)
+
     def _on_transcription_complete(self, text: str) -> None:
         """Called on the main thread after transcription finishes."""
+        self._watchdog.stop()
+        if self._widget.get_state() != C.STATE_PROCESSING:
+            # A late result from a worker the watchdog already gave up on
+            # (or from before a device switch) — drop it rather than flash
+            # a bogus Done state.
+            logger.info("Dropping stale transcription result (%d chars).", len(text))
+            return
         self._widget.set_state(C.STATE_DONE)
         self.transcription_done.emit(text)
 

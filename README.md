@@ -60,6 +60,27 @@ py -m src.main
 - Working microphone
 - ~1GB RAM (with the `small` model)
 
+## GPU (CUDA) support
+
+CTranslate2 (the faster-whisper backend) needs **cuBLAS from CUDA 12** to run on the GPU — it loads `cublas64_12.dll` lazily at the first inference, and without it the model appears to load but every transcription deadlocks. The app handles this at three levels:
+
+- **The bundle ships the runtime.** `build.spec` places `cublas64_12.dll` + `cublasLt64_12.dll` from the `nvidia-cublas-cu12` wheel (see `requirements.txt`) into the bundle, so a fresh install transcribes on the GPU out of the box — no CUDA Toolkit or PATH setup needed, just an NVIDIA driver.
+- **Detection verifies usability.** `auto` picks the GPU only when a device is visible *and* cuBLAS loads; otherwise it logs why and stays on CPU. (In a source checkout, a pip-installed `nvidia-cublas-cu12` is preloaded from `site-packages/nvidia/cublas/bin`.)
+- **The model is proven before it is announced.** After a CUDA load, a tiny warm-up inference runs the actual GPU path with a timeout; if it fails or hangs, the model silently reloads on CPU. A 120-second watchdog does the same for a recording that gets stuck mid-transcription.
+
+An NVIDIA driver that supports CUDA 12.4+ is required (any recent GeForce driver qualifies). CUDA 13-only systems work too — the driver is backwards compatible.
+
+## Building the exe
+
+```powershell
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt pyinstaller
+# The shim works around a PyInstaller/PyQt5/onnxruntime import-order crash:
+$env:PYTHONPATH = "$PWD\build_shim"
+.venv\Scripts\python -m PyInstaller build.spec --noconfirm
+# → dist\VoiceToTextWidget\ (exe + _internal incl. the cuBLAS DLLs)
+```
+
 ## Usage
 
 1. Launch the app — a small widget appears. Wait for the model to load (pink dots).

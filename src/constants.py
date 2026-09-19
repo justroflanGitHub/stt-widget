@@ -81,6 +81,16 @@ DEVICE_LABELS: dict[str, str] = {
 }
 DEFAULT_DEVICE: str = DEVICE_AUTO
 
+# How long the post-load CUDA warm-up inference may take before the GPU is
+# declared broken and the model reloads on CPU. Generous: first use also pays
+# one-time CUDA context init.
+CUDA_WARMUP_TIMEOUT_S: float = 60.0
+# Hard cap on a single transcription (watchdog in main.py). The GPU path is
+# seconds at most; CPU `small` on a long clip can take tens of seconds. If
+# exceeded, the app assumes the worker is deadlocked (the classic missing-
+# cuBLAS symptom) and recovers by reloading the model on CPU.
+TRANSCRIBE_TIMEOUT_S: float = 120.0
+
 
 def compute_type_for_device(device: str) -> str:
     """Return the CTranslate2 compute type appropriate for *device*.

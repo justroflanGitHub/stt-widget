@@ -7,8 +7,12 @@ until the model is ready, then performs inference.
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import os
+import sys
 import threading
+import time
 from typing import Callable, Optional
 
 import numpy as np
@@ -18,17 +22,75 @@ from . import constants as C
 logger = logging.getLogger(__name__)
 
 
-def cuda_available() -> bool:
-    """Return True when CTranslate2 can see at least one CUDA device.
+def _cublas_loadable() -> bool:
+    """Return True when cuBLAS can be loaded for this process.
 
-    Requires the NVIDIA driver plus CUDA/cuDNN runtime libraries. Import is
-    local so environments without a GPU (or without ctranslate2) degrade
-    gracefully to CPU.
+    ctranslate2.dll loads ``cublas64_12.dll`` lazily with a plain
+    ``LoadLibrary`` at the first GPU matmul — the same lookup this probe
+    performs. When it fails, the model still *loads* on CUDA (weights are
+    copied with plain memcpys), but the first real inference either raises or,
+    worse, deadlocks inside ctranslate2 while the widget sits in Processing
+    forever. Checking up front turns that into a clean "CUDA unavailable".
+
+    Two locations are tried:
+
+    * by name — i.e. the standard Windows search order, whose first entry is
+      the executable's directory (where build.spec puts the DLLs);
+    * the pip-installed ``nvidia-cublas-cu12`` wheel, whose ``bin`` directory
+      is never on the search path by itself. Loading by absolute path still
+      helps: the loader keys loaded modules by base name, so ctranslate2's
+      later by-name ``LoadLibrary`` reuses the module preloaded here.
+    """
+    if sys.platform != "win32":
+        return True  # Linux wheels link cuBLAS through rpath — nothing to probe.
+
+    candidates: list[str] = []
+    try:
+        import sysconfig
+
+        pip_bin = os.path.join(
+            sysconfig.get_paths()["purelib"], "nvidia", "cublas", "bin"
+        )
+        if os.path.isdir(pip_bin):
+            for name in os.listdir(pip_bin):
+                if name.lower() == "cublas64_12.dll":
+                    candidates.append(os.path.join(pip_bin, name))
+                    break
+    except Exception:  # sysconfig quirks in frozen builds — the by-name
+        pass           # lookup below is the one that matters there anyway.
+    candidates.append("cublas64_12.dll")  # also pulls in cublasLt64_12.dll
+
+    for candidate in candidates:
+        try:
+            ctypes.CDLL(candidate)
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def cuda_available() -> bool:
+    """Return True when CTranslate2 can actually run on the GPU.
+
+    A visible CUDA device is not enough: the driver only provides
+    ``nvcuda.dll``, while inference additionally needs the CUDA 12 runtime
+    libraries (cuBLAS). Both are checked so ``auto`` never resolves to a CUDA
+    that deadlocks at the first transcription.
     """
     try:
         import ctranslate2
 
-        return ctranslate2.get_cuda_device_count() > 0
+        if ctranslate2.get_cuda_device_count() <= 0:
+            return False
+        if not _cublas_loadable():
+            logger.warning(
+                "CUDA device found but cublas64_12.dll is not loadable — "
+                "GPU disabled. Place cublas64_12.dll + cublasLt64_12.dll next "
+                "to the executable (or install the CUDA 12 runtime / "
+                "nvidia-cublas-cu12)."
+            )
+            return False
+        return True
     except Exception as exc:
         logger.warning("CUDA detection failed (%s); treating as unavailable.", exc)
         return False
@@ -139,6 +201,8 @@ class Transcriber:
                 resolved = resolve_device(self._device)
                 try:
                     model = _load_one(WhisperModel, resolved)
+                    if resolved == C.DEVICE_CUDA and not self._warm_up_cuda(model):
+                        raise RuntimeError("CUDA warm-up inference failed (see log)")
                 except Exception as cuda_exc:
                     if resolved != C.DEVICE_CUDA:
                         raise
@@ -163,6 +227,53 @@ class Transcriber:
         thread = threading.Thread(target=_worker, daemon=True, name="model-loader")
         thread.start()
 
+    @staticmethod
+    def _warm_up_cuda(model) -> bool:
+        """Run a tiny real inference so lazy CUDA loads happen *now*, not mid-use.
+
+        Loading the model only memcpy's weights to the GPU; cuBLAS and friends
+        are first touched by an actual forward pass. If that first pass fails
+        or deadlocks (broken/missing CUDA runtime), this is where we want to
+        find out — before reporting the model as ready. The call runs in its
+        own daemon thread with a timeout because the failure mode is not
+        always an exception: a half-initialised CUDA stack can hang inside
+        ctranslate2 forever, and a hung warm-up thread is disposable.
+        """
+        outcome: dict = {}
+
+        def _run() -> None:
+            try:
+                t0 = time.monotonic()
+                segments, _info = model.transcribe(
+                    np.zeros(C.SAMPLE_RATE, dtype=np.float32),  # 1 s of silence
+                    language="en",
+                    vad_filter=False,
+                    beam_size=1,
+                )
+                for _ in segments:  # generator — force the forward pass
+                    pass
+                outcome["ok"] = True
+                outcome["ms"] = (time.monotonic() - t0) * 1000.0
+            except Exception as exc:
+                outcome["ok"] = False
+                outcome["error"] = str(exc)
+
+        probe = threading.Thread(target=_run, daemon=True, name="cuda-warmup")
+        probe.start()
+        probe.join(C.CUDA_WARMUP_TIMEOUT_S)
+        if outcome.get("ok"):
+            logger.info("CUDA warm-up inference OK in %.0f ms.", outcome["ms"])
+            return True
+        if probe.is_alive():
+            logger.error(
+                "CUDA warm-up did not finish within %ss — GPU inference "
+                "deadlocked; falling back to CPU.",
+                C.CUDA_WARMUP_TIMEOUT_S,
+            )
+        else:
+            logger.error("CUDA warm-up failed: %s", outcome.get("error"))
+        return False
+
     # ── Transcription ─────────────────────────────────────────────────────────
 
     def transcribe(
@@ -182,8 +293,6 @@ class Transcriber:
             The transcribed text, or an empty string on failure.
         """
         # Wait for model to be ready
-        import time
-
         timeout_s = 120
         waited = 0.0
         while not self._loaded:

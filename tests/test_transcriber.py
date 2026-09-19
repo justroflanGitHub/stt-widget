@@ -3,6 +3,7 @@
 All tests mock ``faster_whisper`` so no model download is needed.
 """
 
+import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -83,8 +84,16 @@ class TestDeviceSelection:
             assert resolve_device(C.DEVICE_AUTO) == C.DEVICE_CPU
 
     def test_auto_resolves_to_cuda_with_gpu(self) -> None:
-        with patch("ctranslate2.get_cuda_device_count", return_value=1):
+        with patch("ctranslate2.get_cuda_device_count", return_value=1), \
+             patch("src.transcriber._cublas_loadable", return_value=True):
             assert resolve_device(C.DEVICE_AUTO) == C.DEVICE_CUDA
+
+    def test_auto_resolves_to_cpu_without_cublas(self) -> None:
+        """A visible GPU is not enough — without loadable cuBLAS the GPU path
+        deadlocks at first inference, so auto must stay on CPU."""
+        with patch("ctranslate2.get_cuda_device_count", return_value=1), \
+             patch("src.transcriber._cublas_loadable", return_value=False):
+            assert resolve_device(C.DEVICE_AUTO) == C.DEVICE_CPU
 
     def test_explicit_devices_pass_through(self) -> None:
         assert resolve_device(C.DEVICE_CPU) == C.DEVICE_CPU
@@ -94,9 +103,12 @@ class TestDeviceSelection:
         """auto + GPU present → model built with device='cuda', compute='float16'."""
         t = Transcriber(device=C.DEVICE_AUTO)
         results: list = []
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ([], MagicMock())  # (segments, info)
 
         with patch("ctranslate2.get_cuda_device_count", return_value=1), \
-             patch("faster_whisper.WhisperModel", return_value=MagicMock()) as wm:
+             patch("src.transcriber._cublas_loadable", return_value=True), \
+             patch("faster_whisper.WhisperModel", return_value=mock_model) as wm:
             t.load_model(callback=lambda ok: results.append(ok))
             _wait_for(results)
 
@@ -134,6 +146,61 @@ class TestDeviceSelection:
 
         assert results == [True]
         assert t.is_loaded is True
+        assert t.effective_device == C.DEVICE_CPU
+        assert wm.call_count == 2
+
+    def test_cuda_warmup_failure_falls_back_to_cpu(self) -> None:
+        """Model constructs on CUDA but the warm-up inference raises (e.g. a
+        broken CUDA runtime) → reload once on CPU."""
+        t = Transcriber(device=C.DEVICE_CUDA)
+        results: list = []
+
+        cuda_model = MagicMock()
+        # faster-whisper returns (segments_generator, info); make the generator raise
+        def boom(*args, **kwargs):
+            raise RuntimeError("cublas64_12.dll is not found or cannot be loaded")
+        cuda_model.transcribe.side_effect = boom
+
+        cpu_model = MagicMock()
+        cpu_model.transcribe.return_value = ([], MagicMock())
+
+        def side_effect(size, device=None, compute_type=None):
+            return cuda_model if device == C.DEVICE_CUDA else cpu_model
+
+        with patch("faster_whisper.WhisperModel", side_effect=side_effect) as wm:
+            t.load_model(callback=lambda ok: results.append(ok))
+            _wait_for(results)
+
+        assert results == [True]
+        assert t.is_loaded is True
+        assert t.effective_device == C.DEVICE_CPU
+        assert wm.call_count == 2
+
+    def test_cuda_warmup_hang_falls_back_to_cpu(self, monkeypatch) -> None:
+        """The nastier failure: the warm-up DEADLOCKS instead of raising. The
+        probe thread is abandoned after the timeout and the model reloads on
+        CPU — the app must not hang in Processing forever."""
+        monkeypatch.setattr(C, "CUDA_WARMUP_TIMEOUT_S", 0.2)
+        t = Transcriber(device=C.DEVICE_CUDA)
+        results: list = []
+
+        cuda_model = MagicMock()
+
+        def hang(*args, **kwargs):
+            time.sleep(30)  # simulate a native call that never returns
+
+        cuda_model.transcribe.side_effect = hang
+        cpu_model = MagicMock()
+        cpu_model.transcribe.return_value = ([], MagicMock())
+
+        def side_effect(size, device=None, compute_type=None):
+            return cuda_model if device == C.DEVICE_CUDA else cpu_model
+
+        with patch("faster_whisper.WhisperModel", side_effect=side_effect) as wm:
+            t.load_model(callback=lambda ok: results.append(ok))
+            _wait_for(results)
+
+        assert results == [True]
         assert t.effective_device == C.DEVICE_CPU
         assert wm.call_count == 2
 

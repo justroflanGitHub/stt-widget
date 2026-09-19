@@ -1,6 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Lean PyInstaller spec for VoiceToText Widget."""
 
+import glob as _glob
+import os as _os
+import sysconfig as _sysconfig
+
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 block_cipher = None
@@ -13,6 +17,27 @@ block_cipher = None
 # the OpenMP runtime initialize twice and segfault).
 ct2_datas, ct2_binaries, ct2_hidden = collect_all('ctranslate2')
 fw_datas, fw_binaries, fw_hidden = collect_all('faster_whisper')
+
+# cuBLAS is the ONE CUDA library ctranslate2.dll loads dynamically at the
+# first GPU matmul (cudart is statically linked; Whisper needs no cuDNN).
+# collect_all('ctranslate2') never picks it up because it ships in the
+# separate nvidia-cublas-cu12 wheel, and ctranslate2 loads it with a plain
+# LoadLibrary-by-name — so it must sit at the app root (always first in the
+# Windows DLL search order), not inside _internal. Without these two DLLs the
+# model still "loads" on CUDA but the first transcription deadlocks inside
+# ctranslate2 and the widget stays in Processing forever.
+_cublas_bin = _os.path.join(
+    _sysconfig.get_paths()['purelib'], 'nvidia', 'cublas', 'bin'
+)
+cublas_binaries = [
+    (dll, '.')  # (src, dest_dir): dest '.' → bundle binary root (= _internal,
+                # whose directory PyInstaller's bootloader adds to the DLL
+                # search path; the app root works too)
+    for dll in _glob.glob(_os.path.join(_cublas_bin, 'cublas*64_12.dll'))
+]
+if not cublas_binaries:
+    print('WARNING: nvidia-cublas-cu12 not found — the build will run CPU-only. '
+          'pip install nvidia-cublas-cu12==12.4.5.8 to enable CUDA.')
 
 # Only the hidden imports we actually need
 hidden_imports = [
@@ -46,8 +71,8 @@ datas = ct2_datas + fw_datas
 
 a = Analysis(
     ['launch.py'],
-    pathex=[r'C:\Users\mikhail\.openclaw\workspace\voice-widget'],
-    binaries=ct2_binaries + fw_binaries,
+    pathex=[r'C:\Users\MIKHAIL\Desktop\VoiceToTextWidget1\stt-widget-src'],
+    binaries=ct2_binaries + fw_binaries + cublas_binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
