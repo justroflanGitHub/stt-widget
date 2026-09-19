@@ -18,11 +18,12 @@ A small always-on-top floating widget for Windows that records your voice and tr
   - 🟡 Processing — spinning arc + dots
   - 🟢 Done — green checkmark flash + tooltip with recognized text
   - 🩷 Loading — pulsing dots while model loads
-- **Speech-to-Text** via `faster-whisper` (CTranslate2 backend, CPU `int8` compute).
+- **Speech-to-Text** via `faster-whisper` (CTranslate2 backend).
+  - **CPU (`int8`) or GPU (`float16` on CUDA)** — device `auto` by default: the app detects the GPU and loads the model into VRAM; falls back to CPU when CUDA is unavailable or the CUDA load fails.
   - Auto language detection (ru/en) or force a language.
   - Model `small` by default (configurable).
 - **Auto-copy** recognized text to clipboard.
-- **System tray** with right-click menu: hotkey, Mode, Language, Model, Quit.
+- **System tray** with right-click menu: hotkey, Mode, Language, Model, Device, Quit.
 - **Global hotkey** — **Right Ctrl** by default (configurable).
 - **Settings** persisted to `settings.json`.
 
@@ -103,6 +104,7 @@ py -m src.main
 | `mode`            | string  | `"toggle"`           | `"toggle"` or `"push_to_talk"`       |
 | `language`        | string  | `"auto"`             | `"auto"`, `"ru"`, or `"en"`          |
 | `model_size`      | string  | `"small"`            | faster-whisper model size            |
+| `device`          | string  | `"auto"`             | `"auto"`, `"cpu"`, or `"cuda"`        |
 | `widget_position` | array   | `[100, 100]`         | `[x, y]` screen coordinates           |
 | `global_hotkey`   | string  | `"<ctrl_r>"`         | side-aware pynput format (see Hotkey) |
 
@@ -153,7 +155,8 @@ Main Thread (Qt event loop)
   └── QTimer callbacks
         │
         ├── Model Loader Thread (daemon)
-        │     └── WhisperModel(model_size, cpu, int8)
+        │     └── WhisperModel(model_size, cpu|cuda, int8|float16)
+        │           └── on CUDA failure → retry once on CPU
         │
         └── Transcribe Worker Thread (daemon, per-utterance)
               ├── AudioRecorder.stop() → np.ndarray
@@ -168,7 +171,7 @@ Main Thread (Qt event loop)
 py -m pytest tests/ -v
 ```
 
-All 56 tests pass without a microphone or model download.
+All 65 tests pass without a microphone or model download.
 
 ## Building
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # ── Application metadata ──────────────────────────────────────────────────────
 APP_NAME: str = "VoiceToText Widget"
-APP_VERSION: str = "1.1.0"
+APP_VERSION: str = "1.2.0"
 
 # ── Widget geometry ───────────────────────────────────────────────────────────
 WIDGET_SIZE: int = 72          # square widget, px — slightly bigger
@@ -64,10 +64,30 @@ MODEL_LABELS: dict[str, str] = {
     "small": "Small (recommended)",
     "medium": "Medium (most accurate)",
 }
-DEFAULT_COMPUTE_TYPE: str = "int8"
-DEFAULT_DEVICE: str = "cpu"
+COMPUTE_TYPE_CPU: str = "int8"              # fast + accurate enough on CPU
+COMPUTE_TYPE_CUDA: str = "float16"          # standard GPU compute type
 DEFAULT_LANGUAGE: str = "auto"     # "auto" (ru/en), "ru", or "en"
 SUPPORTED_LANGUAGES: tuple[str, ...] = ("auto", "ru", "en")
+
+# ── Inference device ─────────────────────────────────────────────────────────
+DEVICE_AUTO: str = "auto"   # pick CUDA when available, otherwise CPU
+DEVICE_CPU: str = "cpu"
+DEVICE_CUDA: str = "cuda"
+SUPPORTED_DEVICES: tuple[str, ...] = (DEVICE_AUTO, DEVICE_CPU, DEVICE_CUDA)
+DEVICE_LABELS: dict[str, str] = {
+    DEVICE_AUTO: "Auto (GPU if available)",
+    DEVICE_CPU: "CPU",
+    DEVICE_CUDA: "GPU (CUDA)",
+}
+DEFAULT_DEVICE: str = DEVICE_AUTO
+
+
+def compute_type_for_device(device: str) -> str:
+    """Return the CTranslate2 compute type appropriate for *device*.
+
+    Single source of truth for the device → compute-type mapping.
+    """
+    return COMPUTE_TYPE_CUDA if device == DEVICE_CUDA else COMPUTE_TYPE_CPU
 
 # ── Interaction modes ─────────────────────────────────────────────────────────
 MODE_TOGGLE: str = "toggle"

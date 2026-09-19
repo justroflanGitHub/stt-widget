@@ -101,10 +101,12 @@ class AppController(QObject):
             mode=self._settings["mode"],
             language=self._settings["language"],
             model_size=self._settings["model_size"],
+            device=self._settings.get("device", C.DEFAULT_DEVICE),
         )
         self._tray.mode_changed.connect(self._on_mode_changed)
         self._tray.language_changed.connect(self._on_language_changed)
         self._tray.model_changed.connect(self._on_model_changed)
+        self._tray.device_changed.connect(self._on_device_changed)
         self._tray.set_hotkey_requested.connect(self._open_hotkey_dialog)
         self._tray.quit_requested.connect(self.quit)
         self._tray.update_hotkey_label(self._settings.get("global_hotkey", C.DEFAULT_HOTKEY))
@@ -112,20 +114,20 @@ class AppController(QObject):
         # ── Global hotkey ──────────────────────────────────────────────────────
         self._setup_hotkey()
 
-    def _load_transcriber(self, model_size: str) -> None:
+    def _load_transcriber(self, model_size: str, device: Optional[str] = None) -> None:
         """(Re)create the transcriber for *model_size*; model loads in background.
 
         The single place that constructs a Transcriber — startup, runtime model
         switches and failure fallbacks all go through here, so none of them can
         drift out of sync. The import stays local: Transcriber pulls numpy, and
-        heavy deps (ctranslate2/faster_whisper) load lazily inside it.
+        heavy deps (ctranslate2/faster_whisper) load lazily inside it. The
+        compute type is derived from the device inside the transcriber.
         """
         from .transcriber import Transcriber
 
         self._transcriber = Transcriber(
             model_size=model_size,
-            compute_type=C.DEFAULT_COMPUTE_TYPE,
-            device=C.DEFAULT_DEVICE,
+            device=device if device is not None else self._settings.get("device", C.DEFAULT_DEVICE),
         )
         self._transcriber.load_model(callback=self._on_model_loaded)
 
@@ -219,7 +221,16 @@ class AppController(QObject):
         if success:
             self._last_good_model = self._transcriber.model_size
             self._set_state_both(C.STATE_IDLE)
-            logger.info("Model ready — widget is now active.")
+            effective = self._transcriber.effective_device
+            logger.info("Model ready on '%s' — widget is now active.", effective)
+            if self._tray and effective:
+                if effective == C.DEVICE_CUDA:
+                    self._tray.show_message("Model", "Ready on GPU (CUDA).")
+                elif self._transcriber.device == C.DEVICE_CUDA:
+                    # CUDA was requested explicitly but fell back to CPU.
+                    self._tray.show_message(
+                        "Model", "CUDA unavailable — running on CPU instead."
+                    )
             return
 
         logger.error("Model failed to load. Widget will attempt transcription on demand.")
@@ -355,6 +366,32 @@ class AppController(QObject):
             self._tray.show_message("Model", f"Switching to {model_size}…")
             self._tray.update_model(model_size)
         self._load_transcriber(model_size)
+
+    def _on_device_changed(self, device: str) -> None:
+        """Switch the inference device at runtime (reloads the model)."""
+        current = self._settings.get("device", C.DEFAULT_DEVICE)
+        if device == current and self._transcriber is not None:
+            return
+        state = self._widget.get_state()
+        if state == C.STATE_LOADING:
+            if self._tray:
+                self._tray.show_message("Device", "Still loading — try again in a moment.")
+                self._tray.update_device(current)
+            return
+        if state in (C.STATE_RECORDING, C.STATE_PROCESSING):
+            # Swapping the transcriber mid-recording would break the running
+            # transcription worker — refuse and re-sync the menu checkmark.
+            if self._tray:
+                self._tray.show_message("Device", "Busy — finish the current recording first.")
+                self._tray.update_device(current)
+            return
+        self._settings["device"] = device
+        save_settings(self._settings)
+        self._set_state_both(C.STATE_LOADING)
+        if self._tray:
+            self._tray.show_message("Device", f"Switching to {C.DEVICE_LABELS.get(device, device)}…")
+            self._tray.update_device(device)
+        self._load_transcriber(self._settings["model_size"], device)
 
     def _on_widget_dragged(self, x: int, y: int) -> None:
         self._settings["widget_position"] = [x, y]

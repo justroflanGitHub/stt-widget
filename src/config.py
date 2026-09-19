@@ -24,6 +24,7 @@ def _default_settings() -> dict[str, Any]:
         "mode": C.MODE_TOGGLE,
         "language": C.DEFAULT_LANGUAGE,
         "model_size": C.DEFAULT_MODEL_SIZE,
+        "device": C.DEFAULT_DEVICE,
         "widget_position": [100, 100],
         "global_hotkey": C.DEFAULT_HOTKEY,
     }
@@ -49,7 +50,7 @@ def load_settings() -> dict[str, Any]:
     """Load settings from JSON file, falling back to defaults.
 
     Returns:
-        A dictionary with keys: mode, language, model_size,
+        A dictionary with keys: mode, language, model_size, device,
         widget_position, global_hotkey.
     """
     path = get_settings_path()
@@ -76,6 +77,10 @@ def load_settings() -> dict[str, Any]:
     if merged["language"] not in C.SUPPORTED_LANGUAGES:
         logger.warning("Unknown language %r; falling back to default.", merged["language"])
         merged["language"] = C.DEFAULT_LANGUAGE
+
+    if merged["device"] not in C.SUPPORTED_DEVICES:
+        logger.warning("Unknown device %r; falling back to default.", merged["device"])
+        merged["device"] = C.DEFAULT_DEVICE
 
     return merged
 

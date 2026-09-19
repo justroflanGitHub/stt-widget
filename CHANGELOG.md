@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-09-19
+
+### Added
+- **CUDA GPU support**: the Whisper model can now load into VRAM via CTranslate2 (`float16` compute) instead of CPU `int8`. New **Device** tray menu — `Auto (GPU if available)` / `CPU` / `GPU (CUDA)` — and a `device` key in `settings.json` (default `auto`).
+- Auto-detection: `auto` resolves through `ctranslate2.get_cuda_device_count()`; an explicit CUDA pick that fails at runtime (missing driver/cuDNN) retries once on CPU, and the tray reports what actually loaded ("Ready on GPU (CUDA)" / "CUDA unavailable — running on CPU").
+- `Transcriber.effective_device` property exposing the concrete device after resolution/fallback.
+- 9 new tests: device resolution (`auto`/`cpu`/`cuda`), compute-type pairing (`float16` vs `int8`), CUDA→CPU fallback, settings validation for `device` (65 total).
+
+### Changed
+- Compute type is now derived from the resolved device (single mapping in `constants.compute_type_for_device`) instead of a hardcoded `int8`.
+- `Transcriber.__init__` signature: `compute_type` is optional and defaults to the device-appropriate value.
+
 ## [1.1.0] — 2026-09-01
 
 ### Added

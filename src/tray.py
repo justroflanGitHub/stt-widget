@@ -139,12 +139,15 @@ class TrayController(QObject):
     Signals:
         mode_changed(str): Emitted when the user switches mode.
         language_changed(str): Emitted when the user picks a language.
+        model_changed(str): Emitted when the user picks a model size.
+        device_changed(str): Emitted when the user picks an inference device.
         quit_requested(): Emitted when the user selects Quit.
     """
 
     mode_changed = pyqtSignal(str)
     language_changed = pyqtSignal(str)
     model_changed = pyqtSignal(str)
+    device_changed = pyqtSignal(str)
     set_hotkey_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
@@ -153,11 +156,13 @@ class TrayController(QObject):
         mode: str = C.MODE_TOGGLE,
         language: str = C.DEFAULT_LANGUAGE,
         model_size: str = C.DEFAULT_MODEL_SIZE,
+        device: str = C.DEFAULT_DEVICE,
     ) -> None:
         super().__init__()
         self._mode = mode
         self._language = language
         self._model_size = model_size
+        self._device = device
         self._state = C.STATE_IDLE
 
         icon = _state_icon(C.STATE_IDLE)
@@ -220,6 +225,20 @@ class TrayController(QObject):
             model_menu.addAction(act)
             self._model_actions[size] = act
 
+        # ── Device submenu (CPU / CUDA) ──────────────────────────────────────
+        device_menu = menu.addMenu("Device")
+        device_group = QActionGroup(menu)
+        device_group.setExclusive(True)
+        self._device_actions = {}
+        for dev in C.SUPPORTED_DEVICES:
+            label = C.DEVICE_LABELS.get(dev, dev)
+            act = QAction(label, device_menu, checkable=True)
+            act.setChecked(self._device == dev)
+            act.triggered.connect(lambda checked, d=dev: self._on_device_selected(d))
+            device_group.addAction(act)
+            device_menu.addAction(act)
+            self._device_actions[dev] = act
+
         # ── Separator + Quit ──────────────────────────────────────────────────
         menu.addSeparator()
         quit_action = QAction("Quit", menu)
@@ -267,6 +286,11 @@ class TrayController(QObject):
         self.model_changed.emit(size)
         logger.info("Tray: model changed to %s", size)
 
+    def _on_device_selected(self, device: str) -> None:
+        self._device = device
+        self.device_changed.emit(device)
+        logger.info("Tray: device changed to %s", device)
+
     def _on_quit(self) -> None:
         logger.info("Tray: quit requested.")
         self.quit_requested.emit()
@@ -294,6 +318,12 @@ class TrayController(QObject):
         self._model_size = size
         for model_size, action in self._model_actions.items():
             action.setChecked(model_size == size)
+
+    def update_device(self, device: str) -> None:
+        """Update the checked state of the device menu (same pattern as update_model)."""
+        self._device = device
+        for dev, action in self._device_actions.items():
+            action.setChecked(dev == device)
 
     def update_hotkey_label(self, hotkey: str) -> None:
         """Refresh the 'Set Hotkey…' action to show the current binding."""

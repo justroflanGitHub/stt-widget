@@ -1,5 +1,5 @@
 """
-transcriber.py — faster-whisper wrapper for CPU speech-to-text.
+transcriber.py — faster-whisper wrapper for speech-to-text (CPU or CUDA GPU).
 
 The model loads once in a background thread; ``transcribe()`` blocks
 until the model is ready, then performs inference.
@@ -18,6 +18,34 @@ from . import constants as C
 logger = logging.getLogger(__name__)
 
 
+def cuda_available() -> bool:
+    """Return True when CTranslate2 can see at least one CUDA device.
+
+    Requires the NVIDIA driver plus CUDA/cuDNN runtime libraries. Import is
+    local so environments without a GPU (or without ctranslate2) degrade
+    gracefully to CPU.
+    """
+    try:
+        import ctranslate2
+
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception as exc:
+        logger.warning("CUDA detection failed (%s); treating as unavailable.", exc)
+        return False
+
+
+def resolve_device(device: str) -> str:
+    """Map a configured device (``auto``/``cpu``/``cuda``) to a concrete one.
+
+    ``auto`` becomes ``cuda`` when a GPU is visible, otherwise ``cpu``.
+    Explicit ``cpu``/``cuda`` are passed through unchanged — a requested CUDA
+    load that fails at runtime falls back to CPU inside ``load_model``.
+    """
+    if device == C.DEVICE_AUTO:
+        return C.DEVICE_CUDA if cuda_available() else C.DEVICE_CPU
+    return device
+
+
 class Transcriber:
     """Thin wrapper around ``faster_whisper.WhisperModel``.
 
@@ -27,19 +55,27 @@ class Transcriber:
 
     Parameters:
         model_size: Whisper model identifier (``"tiny"``, ``"base"``, ...).
-        compute_type: CTranslate2 compute type (``"int8"``, ``"float16"``, ...).
-        device: Inference device (``"cpu"``, ``"cuda"``).
+        device: Inference device (``"auto"``, ``"cpu"``, ``"cuda"``).
+        compute_type: CTranslate2 compute type; when ``None`` it is chosen
+            automatically from the resolved device (``float16`` on CUDA,
+            ``int8`` on CPU).
+
+    Attributes:
+        effective_device: The device the model actually loaded on (set after
+            a successful ``load_model``; useful when ``auto`` resolved to CUDA
+            or a CUDA load fell back to CPU).
     """
 
     def __init__(
         self,
         model_size: str = C.DEFAULT_MODEL_SIZE,
-        compute_type: str = C.DEFAULT_COMPUTE_TYPE,
         device: str = C.DEFAULT_DEVICE,
+        compute_type: Optional[str] = None,
     ) -> None:
         self._model_size: str = model_size
-        self._compute_type: str = compute_type
         self._device: str = device
+        self._compute_type: Optional[str] = compute_type
+        self._effective_device: Optional[str] = None
         self._model = None
         self._loaded: bool = False
         self._load_lock = threading.Lock()
@@ -55,6 +91,16 @@ class Transcriber:
     def model_size(self) -> str:
         return self._model_size
 
+    @property
+    def device(self) -> str:
+        """The configured device (``auto``/``cpu``/``cuda``) before resolution."""
+        return self._device
+
+    @property
+    def effective_device(self) -> Optional[str]:
+        """The concrete device (``cpu``/``cuda``) the model loaded on."""
+        return self._effective_device
+
     # ── Model loading ─────────────────────────────────────────────────────────
 
     def load_model(
@@ -63,29 +109,50 @@ class Transcriber:
     ) -> None:
         """Load the Whisper model in a background thread.
 
+        ``auto`` devices are resolved to CUDA/CPU first. If a CUDA load then
+        fails (e.g. missing cuDNN runtime), the worker retries once on CPU so
+        the app keeps working.
+
         Args:
             callback: Called with ``True`` on success or ``False`` on failure.
         """
+
+        def _load_one(whisper_cls, device: str) -> object:
+            """Build the model for a concrete *device* with the matching compute type."""
+            compute = self._compute_type or C.compute_type_for_device(device)
+            logger.info(
+                "Loading Whisper model '%s' (device=%s, compute=%s)…",
+                self._model_size,
+                device,
+                compute,
+            )
+            return whisper_cls(
+                self._model_size,
+                device=device,
+                compute_type=compute,
+            )
 
         def _worker() -> None:
             try:
                 from faster_whisper import WhisperModel
 
-                logger.info(
-                    "Loading Whisper model '%s' (device=%s, compute=%s)…",
-                    self._model_size,
-                    self._device,
-                    self._compute_type,
-                )
-                model = WhisperModel(
-                    self._model_size,
-                    device=self._device,
-                    compute_type=self._compute_type,
-                )
+                resolved = resolve_device(self._device)
+                try:
+                    model = _load_one(WhisperModel, resolved)
+                except Exception as cuda_exc:
+                    if resolved != C.DEVICE_CUDA:
+                        raise
+                    logger.warning(
+                        "CUDA load failed (%s); falling back to CPU.", cuda_exc
+                    )
+                    resolved = C.DEVICE_CPU
+                    model = _load_one(WhisperModel, resolved)
+
                 with self._load_lock:
                     self._model = model
                     self._loaded = True
-                logger.info("Whisper model loaded successfully.")
+                    self._effective_device = resolved
+                logger.info("Whisper model loaded successfully on '%s'.", resolved)
                 if callback:
                     callback(True)
             except Exception as exc:
